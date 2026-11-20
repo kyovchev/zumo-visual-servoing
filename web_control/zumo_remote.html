@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+<title>Zumo Remote</title>
+<style>
+:root{color-scheme:light dark;--bg:#f4f5f7;--card:#fff;--fg:#1a1d21;--mut:#6b7280;--acc:#0a84c6;--bad:#d64545;--ok:#2e9e5b;--line:#d9dce1}
+@media(prefers-color-scheme:dark){:root{--bg:#14171a;--card:#1e2226;--fg:#e8eaed;--mut:#9aa0a6;--line:#343a40}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.4 system-ui,sans-serif;touch-action:manipulation}
+header{display:flex;gap:8px;align-items:center;padding:10px 14px;background:var(--card);border-bottom:1px solid var(--line);flex-wrap:wrap}
+header h1{font-size:17px;margin:0 8px 0 0}
+input[type=text]{padding:7px 9px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--fg);width:150px;font:inherit}
+button{padding:8px 14px;border:0;border-radius:6px;background:var(--acc);color:#fff;font:inherit;cursor:pointer}
+button.sec{background:var(--line);color:var(--fg)}
+button.on{background:var(--ok)}
+.dot{width:11px;height:11px;border-radius:50%;background:var(--bad)}
+.dot.ok{background:var(--ok)}
+main{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px;padding:12px;max-width:980px;margin:auto}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px}
+.card h2{font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--mut);margin:0 0 10px}
+.pad{width:220px;height:220px;margin:6px auto;border-radius:50%;background:var(--bg);border:2px solid var(--line);position:relative;touch-action:none;user-select:none}
+.knob{position:absolute;left:75px;top:75px;width:70px;height:70px;border-radius:50%;background:var(--acc);opacity:.85;pointer-events:none}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:8px 0}
+.stop{width:100%;padding:14px;font-size:17px;font-weight:700;background:var(--bad)}
+.kv{display:flex;justify-content:space-between;padding:3px 0;border-bottom:1px solid var(--line)}
+.kv span:first-child{color:var(--mut)}
+.bars{display:flex;gap:6px;height:70px;align-items:flex-end;margin-top:10px}
+.bars div{flex:1;background:var(--line);border-radius:4px;position:relative;overflow:hidden;height:100%}
+.bars i{position:absolute;bottom:0;left:0;right:0;background:var(--acc);height:0}
+#log{font-size:12px;color:var(--mut);min-height:1.4em;margin-top:6px}
+input[type=range]{width:100%}
+</style>
+</head>
+<body>
+<header>
+  <h1>Zumo Remote</h1>
+  <input type="text" id="host" placeholder="zumo.local or IP">
+  <button id="conn">Connect</button>
+  <span class="dot" id="dot"></span><span id="st">disconnected</span>
+</header>
+<main>
+  <section class="card">
+    <h2>Drive</h2>
+    <div class="pad" id="pad"><div class="knob" id="knob"></div></div>
+    <div class="row" style="justify-content:center"><small style="color:var(--mut)">Drag the pad, or use W A S D / arrow keys</small></div>
+    <label>Max speed: <b id="spv">200</b> (0-400)</label>
+    <input type="range" id="sp" min="50" max="400" step="10" value="200">
+    <div class="row"><button class="stop" id="stop">STOP (Space)</button></div>
+  </section>
+  <section class="card">
+    <h2>Controls</h2>
+    <div class="row">
+      <button class="sec" id="led">LED</button>
+      <button class="sec" data-f="440">Beep low</button>
+      <button class="sec" data-f="880">Beep</button>
+      <button class="sec" data-f="1320">Beep high</button>
+      <button class="sec" data-f="0">Silence</button>
+    </div>
+    <div id="log"></div>
+    <h2 style="margin-top:16px">Telemetry</h2>
+    <div class="kv"><span>Battery</span><span id="bat">-</span></div>
+    <div class="kv"><span>Wheels (L / R)</span><span id="whl">-</span></div>
+    <div class="kv"><span>Wi-Fi RSSI</span><span id="rssi">-</span></div>
+    <div class="kv"><span>Uptime</span><span id="up">-</span></div>
+    <div class="kv"><span>Zumo button</span><span id="btn">-</span></div>
+    <div class="bars" id="bars"></div>
+    <small style="color:var(--mut)">Reflectance sensors, left to right (taller = darker)</small>
+  </section>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+let ws = null, ledOn = false;
+const store = {
+  get(k, d) { try { return localStorage.getItem(k) || d; } catch (e) { return d; } },
+  set(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
+};
+$('host').value = (location.protocol === 'http:' && location.hostname) ? location.hostname : store.get('zumoHost', 'zumo.local');
+$('sp').value = store.get('zumoSpeed', '200');
+$('spv').textContent = $('sp').value;
+$('sp').oninput = () => { $('spv').textContent = $('sp').value; store.set('zumoSpeed', $('sp').value); };
+
+for (let i = 0; i < 6; i++) $('bars').insertAdjacentHTML('beforeend', '<div><i></i></div>');
+const barEls = [...document.querySelectorAll('#bars i')];
+
+const log = t => { $('log').textContent = t; };
+const connected = () => ws && ws.readyState === 1;
+const send = o => { if (connected()) ws.send(JSON.stringify(o)); };
+
+function setStatus(ok, text) {
+  $('dot').className = 'dot' + (ok ? ' ok' : '');
+  $('st').textContent = text;
+  $('conn').textContent = ok ? 'Disconnect' : 'Connect';
+}
+
+function connect() {
+  if (ws) { ws.close(); ws = null; return; }
+  const host = $('host').value.trim();
+  if (!host) return;
+  store.set('zumoHost', host);
+  setStatus(false, 'connecting...');
+  try { ws = new WebSocket('ws://' + host + ':81'); }
+  catch (e) { setStatus(false, 'error'); ws = null; return; }
+  const mine = ws;
+  ws.onopen = () => setStatus(true, 'connected');
+  ws.onclose = () => { if (ws === mine) ws = null; setStatus(false, 'disconnected'); };
+  ws.onerror = () => log('Connection error. Check the address, and that this page is opened over http or as a local file (not https).');
+  ws.onmessage = e => {
+    let m; try { m = JSON.parse(e.data); } catch (x) { return; }
+    if (m.type === 'telemetry') showTelemetry(m);
+    else if (m.type === 'event' && m.name === 'button') $('btn').textContent = m.pressed ? 'pressed' : 'released';
+    else if (m.error) log('Robot: ' + m.error);
+  };
+}
+$('conn').onclick = connect;
+
+function showTelemetry(m) {
+  $('bat').textContent = (m.battery_mv / 1000).toFixed(2) + ' V';
+  $('whl').textContent = m.left + ' / ' + m.right;
+  $('rssi').textContent = m.rssi + ' dBm';
+  $('up').textContent = Math.floor(m.uptime_s / 60) + ' min ' + (m.uptime_s % 60) + ' s';
+  $('btn').textContent = m.button ? 'pressed' : 'released';
+  ledOn = !!m.led;
+  $('led').classList.toggle('on', ledOn);
+  const v = (m.reflectance && m.reflectance.values) || [];
+  barEls.forEach((el, i) => { el.style.height = Math.min(100, (v[i] || 0) / 25) + '%'; });
+}
+
+// ---- driving ----
+let px = 0, py = 0, kx = 0, ky = 0, wasIdle = true;
+const clamp = (v, a = -1, b = 1) => Math.max(a, Math.min(b, v));
+
+setInterval(() => {
+  const x = clamp(px + kx), y = clamp(py + ky);
+  if (Math.abs(x) < 0.05 && Math.abs(y) < 0.05) {
+    if (!wasIdle) { send({ cmd: 'stop' }); wasIdle = true; }
+    return;
+  }
+  wasIdle = false;
+  const max = +$('sp').value;
+  send({ cmd: 'drive', left: Math.round(clamp(y + x) * max), right: Math.round(clamp(y - x) * max) });
+}, 100);
+
+function haltAll() {
+  px = py = kx = ky = 0;
+  $('knob').style.transform = '';
+  keys.clear();
+  send({ cmd: 'stop' });
+  wasIdle = true;
+}
+
+const pad = $('pad'), knob = $('knob'), R = 75;
+let dragging = false;
+function movePad(e) {
+  const r = pad.getBoundingClientRect();
+  let dx = e.clientX - (r.left + r.width / 2), dy = e.clientY - (r.top + r.height / 2);
+  const d = Math.hypot(dx, dy);
+  if (d > R) { dx *= R / d; dy *= R / d; }
+  knob.style.transform = 'translate(' + dx + 'px,' + dy + 'px)';
+  px = dx / R; py = -dy / R;
+}
+pad.onpointerdown = e => { dragging = true; pad.setPointerCapture(e.pointerId); movePad(e); };
+pad.onpointermove = e => { if (dragging) movePad(e); };
+const release = () => { dragging = false; px = py = 0; knob.style.transform = ''; };
+pad.onpointerup = release;
+pad.onpointercancel = release;
+
+const keys = new Set();
+function updateKeys() {
+  kx = (keys.has('d') || keys.has('arrowright') ? 1 : 0) - (keys.has('a') || keys.has('arrowleft') ? 1 : 0);
+  ky = (keys.has('w') || keys.has('arrowup') ? 1 : 0) - (keys.has('s') || keys.has('arrowdown') ? 1 : 0);
+}
+addEventListener('keydown', e => {
+  if (e.target.tagName === 'INPUT') return;
+  const k = e.key.toLowerCase();
+  if (k === ' ') { e.preventDefault(); haltAll(); return; }
+  if (['w', 'a', 's', 'd', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright'].includes(k)) {
+    e.preventDefault(); keys.add(k); updateKeys();
+  }
+});
+addEventListener('keyup', e => { keys.delete(e.key.toLowerCase()); updateKeys(); });
+addEventListener('blur', haltAll);
+document.addEventListener('visibilitychange', () => { if (document.hidden) haltAll(); });
+
+$('stop').onclick = haltAll;
+$('led').onclick = () => { ledOn = !ledOn; send({ cmd: 'led', on: ledOn }); $('led').classList.toggle('on', ledOn); };
+document.querySelectorAll('[data-f]').forEach(b => {
+  b.onclick = () => send({ cmd: 'buzzer', freq: +b.dataset.f, ms: 200 });
+});
+</script>
+</body>
+</html>
