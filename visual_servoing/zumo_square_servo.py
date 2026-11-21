@@ -94,7 +94,7 @@ class Cfg:
     turn_sign: int = 0
     # controller (wheel commands are Zumo units, -400..400)
     vmax: float = 200.0         # cruising speed
-    vmin: float = 90.0          # speed when close to the corner
+    vmin: float = 100.0         # speed when close to the corner
     kv: float = 1.5             # speed per mm of remaining distance
     kw: float = 170.0           # steering command per rad of heading error
     kt: float = 200.0           # in-place turn command per rad of heading error
@@ -183,20 +183,30 @@ class Camera:
         self.cap = cv2.VideoCapture(src, backend)
         if not self.cap.isOpened():
             raise RuntimeError(f"cannot open camera {src}")
+        if backend == cv2.CAP_DSHOW:     # uncompressed YUY2 limits many USB cameras to a few fps at high resolution
+            self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
         self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        print(f"camera: {int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))}x{int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))}, "
+              f"driver reports {self.cap.get(cv2.CAP_PROP_FPS):.0f} fps")
+        self.fps = 0.0                   # measured frames per second delivered by the camera
         self._frame, self._n, self._seen = None, 0, 0
         self._lock = threading.Lock()
         self._run = True
         threading.Thread(target=self._loop, daemon=True).start()
 
     def _loop(self):
+        count, t0 = 0, time.time()
         while self._run:
             ok, f = self.cap.read()
             if ok:
                 with self._lock:
                     self._frame, self._n = f, self._n + 1
+                count += 1
+                now = time.time()
+                if now - t0 >= 1.0:
+                    self.fps, count, t0 = count / (now - t0), 0, now
             else:
                 time.sleep(0.01)
 
@@ -266,6 +276,10 @@ class Servo:
         self.view = None
         # multiply line widths, radii, font sizes by this when drawing
         self.ui = 1.0
+        # processing loop rate (frames handled per second)
+        self.fps = 0.0
+        self.detect_ms = 0.0              # marker detection time per frame
+        self._t_prev = None
         self.last_seen = self.now()
         self.frame_size = (cfg.width, cfg.height)
 
@@ -276,6 +290,11 @@ class Servo:
     def step(self, info=""):
         """Grab a frame, detect the marker, draw the overlay, handle keys. Returns Pose or None."""
         frame = self.cam.read()
+        tn = time.perf_counter()
+        if self._t_prev is not None and tn > self._t_prev:
+            inst = 1.0 / (tn - self._t_prev)
+            self.fps = inst if self.fps == 0 else 0.9 * self.fps + 0.1 * inst
+        self._t_prev = tn
         if self.calib:
             frame = cv2.undistort(frame, *self.calib)
         self.frame_size = (frame.shape[1], frame.shape[0])
@@ -288,7 +307,10 @@ class Servo:
                 # leave room for title bar / taskbar
                 self.view = min(1.0, 0.95 * sw / w, 0.9 * sh / h)
             self.ui = 1.0 / self.view
+        t_det = time.perf_counter()
         self.last_found = self.vision.find_all(frame)
+        self.detect_ms = 0.9 * self.detect_ms + \
+            0.1 * (time.perf_counter() - t_det) * 1000
         corners = self.last_found.get(self.cfg.marker_id)
         pose = None
         if corners is not None:
@@ -338,6 +360,10 @@ class Servo:
             self.overlay(frame)
         cv2.putText(frame, info, (t(10), t(28)),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.7 * ui, (0, 255, 255), t(2))
+        stats = (f"camera {getattr(self.cam, 'fps', 0.0):.1f} fps | loop {self.fps:.1f} fps | "
+                 f"detect {self.detect_ms:.0f} ms | {frame.shape[1]}x{frame.shape[0]}")
+        cv2.putText(frame, stats, (t(10), t(58)),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6 * ui, (0, 255, 255), t(2))
         if self.view < 1.0:
             frame = cv2.resize(frame, None, fx=self.view,
                                fy=self.view, interpolation=cv2.INTER_AREA)
