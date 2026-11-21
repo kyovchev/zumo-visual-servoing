@@ -45,6 +45,8 @@ def main():
     servo = zs.build_servo(ap.parse_args(), ClickServo)
 
     tgt = {"pos": None, "head": None, "down_set": False, "cursor": None}
+    # result of the last move, shown in the window
+    last = {"pos": None, "label": "", "text": ""}
     MIN_PX = 12
 
     def far(p, x, y):
@@ -70,6 +72,8 @@ def main():
     def overlay(frame):
         ui = servo.ui
         def t(n): return max(1, int(round(n * ui)))
+        font, green, orange = cv2.FONT_HERSHEY_SIMPLEX, (
+            0, 255, 0), (0, 165, 255)
         if tgt["pos"]:
             cv2.circle(frame, tgt["pos"], t(9), (0, 0, 255), t(2))
             if tgt["head"]:
@@ -78,7 +82,25 @@ def main():
             elif tgt["cursor"] and far(tgt["pos"], *tgt["cursor"]):
                 # preview while dragging / moving the mouse after the first click
                 cv2.arrowedLine(
-                    frame, tgt["pos"], tgt["cursor"], (0, 165, 255), t(2), tipLength=0.2)
+                    frame, tgt["pos"], tgt["cursor"], orange, t(2), tipLength=0.2)
+            if servo.busy and servo.trail:                       # live distance to the target while moving
+                rx, ry = servo.trail[-1]
+                dist = math.hypot(tgt["pos"][0] - rx,
+                                  tgt["pos"][1] - ry) * servo.scale
+                cv2.line(frame, (rx, ry), tgt["pos"], orange, t(1))
+                cv2.putText(frame, f"{dist:.0f} mm", (tgt["pos"][0] + t(14), tgt["pos"][1] - t(14)),
+                            font, 0.7 * ui, orange, t(2))
+                cv2.putText(frame, f"distance to target: {dist:.0f} mm", (t(10), t(88)),
+                            font, 0.7 * ui, orange, t(2))
+        # final error next to the last target
+        elif last["pos"]:
+            p = last["pos"]
+            cv2.drawMarker(frame, p, green, cv2.MARKER_CROSS, t(18), t(2))
+            cv2.putText(frame, last["label"], (p[0] + t(14),
+                        p[1] - t(14)), font, 0.7 * ui, green, t(2))
+        if last["text"] and not (servo.busy and tgt["pos"]):
+            cv2.putText(frame, last["text"], (t(10), t(
+                88)), font, 0.7 * ui, green, t(2))
 
     servo.overlay = overlay
     try:
@@ -98,17 +120,23 @@ def main():
                 try:
                     err = servo.goto(
                         np.array(pos) * servo.scale, theta, "goto")
-                    msg = f"arrived: position error {err:.1f} mm"
+                    msg = f"position error {err:.1f} mm"
                     if theta is not None:
                         herr = math.degrees(
                             zs.wrap(servo.avg_pose(4).theta - theta))
                         msg += f", heading error {herr:.1f} deg"
-                    print(msg)
+                    print("arrived:", msg)
+                    last.update(
+                        pos=pos, label=f"error {err:.1f} mm", text="last move: " + msg)
                 except Cancel:
                     print("move cancelled")
+                    last.update(pos=None, label="",
+                                text="last move: cancelled")
                 except RuntimeError as e:
                     print("ERROR:", e)
                     servo.robot.stop()
+                    last.update(pos=None, label="",
+                                text=f"last move failed: {e}")
                 finally:
                     servo.busy = False
                     servo.waypoints = None
