@@ -48,7 +48,7 @@ def main():
     MIN_PX = 12
 
     def far(p, x, y):
-        return math.hypot(x - p[0], y - p[1]) > MIN_PX
+        return math.hypot(x - p[0], y - p[1]) > MIN_PX * servo.ui
 
     def on_mouse(ev, x, y, flags, _):
         if servo.busy:
@@ -68,20 +68,22 @@ def main():
             tgt["down_set"] = False
 
     def overlay(frame):
+        ui = servo.ui
+        def t(n): return max(1, int(round(n * ui)))
         if tgt["pos"]:
-            cv2.circle(frame, tgt["pos"], 9, (0, 0, 255), 2)
+            cv2.circle(frame, tgt["pos"], t(9), (0, 0, 255), t(2))
             if tgt["head"]:
                 cv2.arrowedLine(
-                    frame, tgt["pos"], tgt["head"], (0, 0, 255), 2, tipLength=0.2)
+                    frame, tgt["pos"], tgt["head"], (0, 0, 255), t(2), tipLength=0.2)
             elif tgt["cursor"] and far(tgt["pos"], *tgt["cursor"]):
                 # preview while dragging / moving the mouse after the first click
                 cv2.arrowedLine(
-                    frame, tgt["pos"], tgt["cursor"], (0, 165, 255), 2, tipLength=0.2)
+                    frame, tgt["pos"], tgt["cursor"], (0, 165, 255), t(2), tipLength=0.2)
 
     servo.overlay = overlay
     try:
         servo.prepare()
-        cv2.setMouseCallback("zumo servo", on_mouse)
+        servo.set_mouse(on_mouse)
         print("ready: click a target position, then click the orientation")
         while True:
             servo.step(
