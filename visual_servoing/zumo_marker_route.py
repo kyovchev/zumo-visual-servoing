@@ -25,33 +25,44 @@ import zumo_square_servo as zs
 
 
 def main():
-    ap = zs.common_parser("Drive the Zumo through floor markers in the order of their IDs")
-    ap.add_argument("--target-mm", type=float, default=50.0, help="outer side of the floor markers, mm")
-    ap.add_argument("--ids", default="", help="comma-separated IDs to visit (default: all found)")
-    ap.add_argument("--loop", action="store_true", help="repeat the route until Q is pressed")
-    ap.add_argument("--no-perspective", action="store_true", help="skip the marker-height perspective correction")
+    ap = zs.common_parser(
+        "Drive the Zumo through floor markers in the order of their IDs")
+    ap.add_argument("--target-mm", type=float, default=50.0,
+                    help="outer side of the floor markers, mm")
+    ap.add_argument("--ids", default="",
+                    help="comma-separated IDs to visit (default: all found)")
+    ap.add_argument("--loop", action="store_true",
+                    help="repeat the route until Q is pressed")
+    ap.add_argument("--no-perspective", action="store_true",
+                    help="skip the marker-height perspective correction")
     a = ap.parse_args()
     servo = zs.build_servo(a)
 
     try:
         servo.prepare()
         found = servo.scan_markers()
-        wanted = {int(x) for x in a.ids.split(",") if x.strip()} if a.ids else None
+        wanted = {int(x) for x in a.ids.split(
+            ",") if x.strip()} if a.ids else None
         ids = sorted(i for i in found if wanted is None or i in wanted)
         if wanted and wanted - set(ids):
-            raise RuntimeError(f"markers not found in the image: {sorted(wanted - set(ids))}")
+            raise RuntimeError(
+                f"markers not found in the image: {sorted(wanted - set(ids))}")
         if not ids:
-            raise RuntimeError("no floor markers found (check --dict, lighting, marker sizes)")
+            raise RuntimeError(
+                "no floor markers found (check --dict, lighting, marker sizes)")
 
         w, h = servo.frame_size
         c0, s_r = np.array([w / 2.0, h / 2.0]), servo.scale
         route = []
         for i in ids:
             p_px, side = found[i]
-            s_f = a.target_mm / side                                  # mm per pixel at the floor marker
-            P = p_px * s_r if a.no_perspective else c0 * s_r + (p_px - c0) * s_f
+            # mm per pixel at the floor marker
+            s_f = a.target_mm / side
+            P = p_px * s_r if a.no_perspective else c0 * \
+                s_r + (p_px - c0) * s_f
             route.append((i, P, p_px))
-        print("route:", " -> ".join(f"id {i} ({P[0]:.0f}, {P[1]:.0f}) mm" for i, P, _ in route))
+        print(
+            "route:", " -> ".join(f"id {i} ({P[0]:.0f}, {P[1]:.0f}) mm" for i, P, _ in route))
 
         def overlay(frame):
             for n, (i, P, p_px) in enumerate(route, 1):
@@ -59,8 +70,10 @@ def main():
                 cv2.circle(frame, q, 14, (255, 255, 255), 2)
                 cv2.putText(frame, f"{n}: id {i}", (q[0] + 16, q[1] - 12),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-                t = (P / s_r).astype(int)                             # where the robot's marker must be
-                cv2.drawMarker(frame, (int(t[0]), int(t[1])), (0, 0, 255), cv2.MARKER_CROSS, 18, 2)
+                # where the robot's marker must be
+                t = (P / s_r).astype(int)
+                cv2.drawMarker(frame, (int(t[0]), int(
+                    t[1])), (0, 0, 255), cv2.MARKER_CROSS, 18, 2)
 
         servo.overlay = overlay
         while True:
