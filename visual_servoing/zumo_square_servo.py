@@ -93,8 +93,8 @@ class Cfg:
     offset_deg: float = None
     turn_sign: int = 0
     # controller (wheel commands are Zumo units, -400..400)
-    vmax: float = 200.0         # cruising speed
-    vmin: float = 100.0         # speed when close to the corner
+    vmax: float = 150.0         # cruising speed
+    vmin: float = 90.0          # speed when close to the corner
     kv: float = 1.5             # speed per mm of remaining distance
     kw: float = 170.0           # steering command per rad of heading error
     kt: float = 200.0           # in-place turn command per rad of heading error
@@ -107,7 +107,7 @@ class Cfg:
     turn_tol_deg: float = 4.0
     spin_thresh_deg: float = 50.0
     settle_s: float = 0.35
-    lost_stop_s: float = 0.25
+    lost_stop_s: float = 0.75
     seg_timeout: float = 40.0
     turn_timeout: float = 20.0
     cal_speed: float = 120.0
@@ -580,11 +580,11 @@ class Servo:
         return all(margin <= x <= w_px - margin and margin <= y <= h_px - margin
                    for x, y in (w / self.scale for w in W))
 
-    def wait_until_square_fits(self):
-        """The square does not fit: the robot is moved by hand. Shows the square for the robot's
-        current pose live and returns when it fits and S is pressed."""
-        print("The square does not fit in the camera image. Move the robot by hand, then press S.")
-        info = "square does not fit - move the robot by hand"
+    def confirm_square(self):
+        """Show the square for the robot's current pose, live. The robot can be moved by hand meanwhile.
+        Returns when the square fits in the image and S is pressed (Q quits)."""
+        print("Check the square in the window, move the robot by hand if needed, then press S (Q = quit).")
+        info = "marker not visible"
         while True:
             pose = self.step(info)
             if pose is None:
@@ -593,29 +593,41 @@ class Servo:
             _, W = self.square_path(pose)
             ok = self.fits(W)
             self.waypoints = [tuple(w) for w in W]
-            info = "square fits - press S to start" if ok else "square does not fit - move the robot by hand"
+            info = ("square OK - press S to start, Q = quit" if ok
+                    else "square does not fit - move the robot by hand")
+            if self.note:
+                info += "   |   " + self.note
             if ok and self.last_key == ord("s"):
                 return
 
-    def run(self):
-        self.prepare()
-        while True:
-            p0 = self.avg_pose()
-            psis, W = self.square_path(p0)
-            if self.fits(W):
-                break
-            self.wait_until_square_fits()
+    def drive_square(self, p0, psis, W):
         self.waypoints = [tuple(w) for w in W]
-
         for i, psi in enumerate(psis):
             self.turn_to(psi, f"edge {i + 1}/4")
             self.drive_segment(W[i], W[i + 1], f"edge {i + 1}/4")
         self.turn_to(p0.theta, "final heading")
         pf = self.avg_pose()
         err = math.hypot(pf.x - p0.x, pf.y - p0.y)
-        print(f"done: end position error {err:.1f} mm, heading error "
-              f"{math.degrees(wrap(pf.theta - p0.theta)):.1f} deg")
-        self.wait(1.5, f"DONE - error {err:.1f} mm")
+        herr = math.degrees(wrap(pf.theta - p0.theta))
+        print(
+            f"done: end position error {err:.1f} mm, heading error {herr:.1f} deg")
+        self.note = f"last run: error {err:.1f} mm, {herr:.1f} deg"
+
+    def run(self):
+        self.note = ""
+        self.prepare()
+        while True:
+            self.confirm_square()
+            try:
+                p0 = self.avg_pose()
+                psis, W = self.square_path(p0)
+                if not self.fits(W):
+                    continue                    # the robot was moved after S was pressed
+                self.drive_square(p0, psis, W)
+            except RuntimeError as e:           # timeout, marker lost, ...: keep the window open
+                self.robot.stop()
+                self.note = f"last run failed: {e}"
+                print("ERROR:", e)
 
 
 # ----------------------------------------------------------------------------- shared CLI / setup
