@@ -52,6 +52,16 @@ def circ_mean(angles):
     return math.atan2(np.mean(np.sin(angles)), np.mean(np.cos(angles)))
 
 
+def screen_size():
+    """Screen size in pixels (Windows API; falls back to Full HD elsewhere)."""
+    try:
+        import ctypes
+        u = ctypes.windll.user32
+        return u.GetSystemMetrics(0), u.GetSystemMetrics(1)
+    except Exception:
+        return 1920, 1080
+
+
 class Abort(Exception):
     pass
 
@@ -61,7 +71,8 @@ class Pose:
     x: float        # mm
     y: float        # mm (image y axis points down)
     ang: float      # raw marker angle in the image, rad
-    theta: float    # robot heading in the image, rad (marker angle + calibrated offset)
+    # robot heading in the image, rad (marker angle + calibrated offset)
+    theta: float
     side: float     # marker side length in pixels
 
 
@@ -82,8 +93,8 @@ class Cfg:
     offset_deg: float = None
     turn_sign: int = 0
     # controller (wheel commands are Zumo units, -400..400)
-    vmax: float = 250.0         # cruising speed
-    vmin: float = 150.0          # speed when close to the corner
+    vmax: float = 200.0         # cruising speed
+    vmin: float = 90.0          # speed when close to the corner
     kv: float = 1.5             # speed per mm of remaining distance
     kw: float = 170.0           # steering command per rad of heading error
     kt: float = 200.0           # in-place turn command per rad of heading error
@@ -103,6 +114,7 @@ class Cfg:
     cal_spin: float = 120.0
     cal_dist: float = 60.0
     cal_timeout: float = 4.0
+    view_scale: float = 0.0     # display scale of the video window, 0 = fit the screen
 
 
 # ----------------------------------------------------------------------------- robot link
@@ -166,7 +178,8 @@ class Camera:
 
     def __init__(self, src, width, height):
         src = int(src) if str(src).isdigit() else src
-        backend = cv2.CAP_DSHOW if (os.name == "nt" and isinstance(src, int)) else cv2.CAP_ANY
+        backend = cv2.CAP_DSHOW if (
+            os.name == "nt" and isinstance(src, int)) else cv2.CAP_ANY
         self.cap = cv2.VideoCapture(src, backend)
         if not self.cap.isOpened():
             raise RuntimeError(f"cannot open camera {src}")
@@ -215,7 +228,8 @@ class Vision:
         else:
             p = cv2.aruco.DetectorParameters_create()
             p.cornerRefinementMethod = cv2.aruco.CORNER_REFINE_SUBPIX
-            self._detect = lambda g: cv2.aruco.detectMarkers(g, d, parameters=p)
+            self._detect = lambda g: cv2.aruco.detectMarkers(
+                g, d, parameters=p)
 
     def find_all(self, frame):
         """{id: corners (4x2, pixels)} for every marker in the image."""
@@ -237,14 +251,21 @@ class Servo:
     def __init__(self, cfg, cam, vision, robot, calib=None):
         self.cfg, self.cam, self.vision, self.robot = cfg, cam, vision, robot
         self.calib = calib
-        self.offset = 0.0 if cfg.offset_deg is None else math.radians(cfg.offset_deg)
+        self.offset = 0.0 if cfg.offset_deg is None else math.radians(
+            cfg.offset_deg)
         self.turn_sign = cfg.turn_sign or 1
         self.scale = None                 # mm per pixel
         self.waypoints = None
         self.trail = []
         self.last_key = -1
         self.last_found = {}              # all markers of the latest frame
-        self.overlay = None               # optional callable(frame) for extra drawing
+        self._window = False
+        # optional callable(frame) for extra drawing (full-res frame)
+        self.overlay = None
+        # display scale (window size / camera image size)
+        self.view = None
+        # multiply line widths, radii, font sizes by this when drawing
+        self.ui = 1.0
         self.last_seen = self.now()
         self.frame_size = (cfg.width, cfg.height)
 
@@ -258,12 +279,22 @@ class Servo:
         if self.calib:
             frame = cv2.undistort(frame, *self.calib)
         self.frame_size = (frame.shape[1], frame.shape[0])
+        if self.view is None:
+            w, h = self.frame_size
+            if self.cfg.view_scale > 0:
+                self.view = min(1.0, self.cfg.view_scale)
+            else:
+                sw, sh = screen_size()
+                # leave room for title bar / taskbar
+                self.view = min(1.0, 0.95 * sw / w, 0.9 * sh / h)
+            self.ui = 1.0 / self.view
         self.last_found = self.vision.find_all(frame)
         corners = self.last_found.get(self.cfg.marker_id)
         pose = None
         if corners is not None:
             c = corners.mean(axis=0)
-            side = float(np.mean([np.linalg.norm(corners[i] - corners[(i + 1) % 4]) for i in range(4)]))
+            side = float(
+                np.mean([np.linalg.norm(corners[i] - corners[(i + 1) % 4]) for i in range(4)]))
             ang = math.atan2(*(corners[1] - corners[0])[::-1])
             s = self.scale or self.cfg.marker_mm / side
             pose = Pose(c[0] * s, c[1] * s, ang, wrap(ang + self.offset), side)
@@ -281,23 +312,46 @@ class Servo:
         return pose
 
     def _draw(self, frame, corners, pose, info):
+        ui = self.ui
+        # thickness / radius that looks the same after downscaling
+        def t(n): return max(1, int(round(n * ui)))
         if corners is not None:
-            cv2.polylines(frame, [corners.astype(int)], True, (0, 255, 0), 2)
+            cv2.polylines(frame, [corners.astype(int)],
+                          True, (0, 255, 0), t(2))
         if self.scale and self.waypoints is not None:
             pts = (np.array(self.waypoints) / self.scale).astype(int)
-            cv2.polylines(frame, [pts.reshape(-1, 1, 2)], False, (255, 160, 0), 2)
+            cv2.polylines(frame, [pts.reshape(-1, 1, 2)],
+                          False, (255, 160, 0), t(2))
             for p in pts:
-                cv2.circle(frame, tuple(int(v) for v in p), 6, (0, 0, 255), -1)
+                cv2.circle(frame, tuple(int(v)
+                           for v in p), t(6), (0, 0, 255), -1)
         if len(self.trail) > 1:
-            cv2.polylines(frame, [np.array(self.trail, np.int32).reshape(-1, 1, 2)], False, (0, 220, 255), 1)
+            cv2.polylines(frame, [np.array(
+                self.trail, np.int32).reshape(-1, 1, 2)], False, (0, 220, 255), t(1))
         if pose and self.scale:
             c = np.array([pose.x, pose.y]) / self.scale
-            e = c + 70 * np.array([math.cos(pose.theta), math.sin(pose.theta)])
-            cv2.arrowedLine(frame, tuple(int(v) for v in c), tuple(int(v) for v in e), (255, 0, 255), 2)
+            e = c + 70 * ui * \
+                np.array([math.cos(pose.theta), math.sin(pose.theta)])
+            cv2.arrowedLine(frame, tuple(int(v) for v in c), tuple(
+                int(v) for v in e), (255, 0, 255), t(2))
         if self.overlay:
             self.overlay(frame)
-        cv2.putText(frame, info, (10, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+        cv2.putText(frame, info, (t(10), t(28)),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7 * ui, (0, 255, 255), t(2))
+        if self.view < 1.0:
+            frame = cv2.resize(frame, None, fx=self.view,
+                               fy=self.view, interpolation=cv2.INTER_AREA)
+        if not self._window:
+            cv2.namedWindow("zumo servo", cv2.WINDOW_AUTOSIZE)
+            cv2.moveWindow("zumo servo", 0, 0)
+            self._window = True
         cv2.imshow("zumo servo", frame)
+
+    def set_mouse(self, cb):
+        """Register cb(event, x, y, flags, param); x, y are given in camera-image pixels, not window pixels."""
+        def wrapper(ev, x, y, flags, param):
+            cb(ev, int(x * self.ui), int(y * self.ui), flags, param)
+        cv2.setMouseCallback("zumo servo", wrapper)
 
     def wait(self, secs, info="waiting"):
         t = self.now() + secs
@@ -313,7 +367,8 @@ class Servo:
         if len(poses) < max(3, n // 2):
             raise RuntimeError("marker not visible")
         return Pose(np.mean([p.x for p in poses]), np.mean([p.y for p in poses]),
-                    circ_mean([p.ang for p in poses]), circ_mean([p.theta for p in poses]),
+                    circ_mean([p.ang for p in poses]), circ_mean(
+                        [p.theta for p in poses]),
                     np.mean([p.side for p in poses]))
 
     # ---- actuation
@@ -354,7 +409,8 @@ class Servo:
         self.wait(0.6, "calibrating: settle")
         d = wrap(self.avg_pose().ang - a0)
         if abs(d) < math.radians(5):
-            raise RuntimeError("spin test: the marker did not rotate (battery? wires? marker visible?)")
+            raise RuntimeError(
+                "spin test: the marker did not rotate (battery? wires? marker visible?)")
         if self.cfg.turn_sign == 0:
             self.turn_sign = 1 if d > 0 else -1
         print(f"turn sign: {self.turn_sign:+d}")
@@ -421,10 +477,12 @@ class Servo:
                 self.robot.stop()
                 self.wait(c.settle_s, f"{label}: arrived")
                 return
-            Q = A + d * clamp(along + c.lookahead, 0.0, L)          # carrot on the edge
+            # carrot on the edge
+            Q = A + d * clamp(along + c.lookahead, 0.0, L)
             a = wrap(math.atan2(Q[1] - P[1], Q[0] - P[0]) - pose.theta)
             if abs(a) > math.radians(c.spin_thresh_deg):
-                self.spin(a)                                          # heading lost: re-align in place
+                # heading lost: re-align in place
+                self.spin(a)
                 continue
             v = clamp(c.kv * dist, c.vmin, c.vmax) * math.cos(a)
             self.set_wheels(v, c.kw * a)
@@ -440,7 +498,8 @@ class Servo:
         if c.offset_deg is None:
             self.calibrate_heading()
         else:
-            print(f"using heading offset {c.offset_deg} deg, turn sign {self.turn_sign:+d}")
+            print(
+                f"using heading offset {c.offset_deg} deg, turn sign {self.turn_sign:+d}")
 
     def goto(self, target, theta=None, label="goto"):
         """Drive to target (mm, same frame as Pose.x/y). If theta (rad) is given, finish with that heading."""
@@ -453,7 +512,8 @@ class Servo:
         if theta is not None:
             self.turn_to(theta, label)
         pf = self.avg_pose(4)
-        return math.hypot(pf.x - B[0], pf.y - B[1])      # final position error, mm
+        # final position error, mm
+        return math.hypot(pf.x - B[0], pf.y - B[1])
 
     def scan_markers(self, n=25, min_frac=0.5):
         """Average all non-robot markers over n frames. Returns {id: (center_px (2,), side_px)}."""
@@ -462,7 +522,8 @@ class Servo:
             self.step("scanning markers")
             for i, cr in self.last_found.items():
                 if i != self.cfg.marker_id:
-                    side = float(np.mean([np.linalg.norm(cr[k] - cr[(k + 1) % 4]) for k in range(4)]))
+                    side = float(
+                        np.mean([np.linalg.norm(cr[k] - cr[(k + 1) % 4]) for k in range(4)]))
                     acc.setdefault(i, []).append((cr.mean(axis=0), side))
         return {i: (np.mean([a for a, _ in v], axis=0), float(np.mean([b for _, b in v])))
                 for i, v in acc.items() if len(v) >= min_frac * n}
@@ -477,8 +538,10 @@ class Servo:
         psis = [p0.theta + i * step_ang for i in range(4)]
         W = [np.array([p0.x, p0.y])]
         for psi in psis:
-            W.append(W[-1] + c.side_mm * np.array([math.cos(psi), math.sin(psi)]))
-        W[-1] = W[0].copy()                                           # close the square exactly
+            W.append(W[-1] + c.side_mm *
+                     np.array([math.cos(psi), math.sin(psi)]))
+        # close the square exactly
+        W[-1] = W[0].copy()
         self.waypoints = [tuple(w) for w in W]
 
         w_px, h_px = self.frame_size
@@ -486,7 +549,8 @@ class Servo:
         for w in W:
             x, y = w / self.scale
             if not (m <= x <= w_px - m and m <= y <= h_px - m):
-                raise RuntimeError("the square does not fit in the camera image - move the robot or the camera")
+                raise RuntimeError(
+                    "the square does not fit in the camera image - move the robot or the camera")
 
         for i, psi in enumerate(psis):
             self.turn_to(psi, f"edge {i + 1}/4")
@@ -504,26 +568,36 @@ def common_parser(desc):
     ap = argparse.ArgumentParser(description=desc)
     ap.add_argument("--host", default=Cfg.host, help="robot IP or hostname")
     ap.add_argument("--port", type=int, default=Cfg.port)
-    ap.add_argument("--cam", default=Cfg.cam, help="camera index or stream URL")
+    ap.add_argument("--cam", default=Cfg.cam,
+                    help="camera index or stream URL")
     ap.add_argument("--width", type=int, default=Cfg.width)
     ap.add_argument("--height", type=int, default=Cfg.height)
     ap.add_argument("--dict", dest="dict_name", default=Cfg.dict_name,
                     help="ArUco dictionary, e.g. DICT_4X4_50, DICT_5X5_100, DICT_6X6_250, DICT_ARUCO_ORIGINAL")
-    ap.add_argument("--id", dest="marker_id", type=int, default=Cfg.marker_id, help="ID of the marker on the robot")
-    ap.add_argument("--marker-mm", type=float, default=Cfg.marker_mm, help="outer side of the robot marker's black square")
-    ap.add_argument("--calib", default="", help="npz file with camera_matrix and dist_coeffs (optional)")
-    ap.add_argument("--no-robot", action="store_true", help="vision only, never command the robot")
-    ap.add_argument("--offset-deg", type=float, default=None, help="skip calibration: marker-to-robot heading offset")
-    ap.add_argument("--turn-sign", type=int, default=0, choices=[-1, 0, 1], help="skip calibration of turn sign")
+    ap.add_argument("--id", dest="marker_id", type=int,
+                    default=Cfg.marker_id, help="ID of the marker on the robot")
+    ap.add_argument("--marker-mm", type=float, default=Cfg.marker_mm,
+                    help="outer side of the robot marker's black square")
+    ap.add_argument("--calib", default="",
+                    help="npz file with camera_matrix and dist_coeffs (optional)")
+    ap.add_argument("--no-robot", action="store_true",
+                    help="vision only, never command the robot")
+    ap.add_argument("--offset-deg", type=float, default=None,
+                    help="skip calibration: marker-to-robot heading offset")
+    ap.add_argument("--turn-sign", type=int, default=0,
+                    choices=[-1, 0, 1], help="skip calibration of turn sign")
     ap.add_argument("--vmax", type=float, default=Cfg.vmax)
     ap.add_argument("--vmin", type=float, default=Cfg.vmin)
     ap.add_argument("--kw", type=float, default=Cfg.kw)
     ap.add_argument("--lookahead", type=float, default=Cfg.lookahead)
+    ap.add_argument("--view-scale", type=float, default=Cfg.view_scale,
+                    help="display scale of the video window (0 = fit the screen automatically)")
     return ap
 
 
 def build_servo(args, servo_cls=Servo):
-    cfg = Cfg(**{k: v for k, v in vars(args).items() if k in Cfg.__dataclass_fields__})
+    cfg = Cfg(**{k: v for k, v in vars(args).items()
+              if k in Cfg.__dataclass_fields__})
     calib = None
     if cfg.calib:
         z = np.load(cfg.calib)
@@ -550,8 +624,10 @@ def shutdown(servo):
 # ----------------------------------------------------------------------------- main
 def main():
     ap = common_parser("Zumo square path by visual servoing")
-    ap.add_argument("--side", dest="side_mm", type=float, default=Cfg.side_mm, help="square side, mm")
-    ap.add_argument("--ccw", action="store_true", help="turn left instead of right")
+    ap.add_argument("--side", dest="side_mm", type=float,
+                    default=Cfg.side_mm, help="square side, mm")
+    ap.add_argument("--ccw", action="store_true",
+                    help="turn left instead of right")
     servo = build_servo(ap.parse_args())
     try:
         servo.run()
