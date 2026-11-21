@@ -487,8 +487,8 @@ class Servo:
             v = clamp(c.kv * dist, c.vmin, c.vmax) * math.cos(a)
             self.set_wheels(v, c.kw * a)
 
-    def prepare(self):
-        """Preview, wait for S, measure the scale, calibrate heading and turn direction."""
+    def prepare(self, return_to_start=True):
+        """Preview, wait for S, measure the scale, calibrate, then drive back to where the robot was."""
         c = self.cfg
         while True:
             pose = self.step("S = start, Q = quit")
@@ -496,7 +496,14 @@ class Servo:
                 break
         self.estimate_scale()
         if c.offset_deg is None:
+            start = self.avg_pose()                      # pose before the calibration moves
             self.calibrate_heading()
+            if return_to_start:
+                # its heading, now that the offset is known
+                theta = wrap(start.ang + self.offset)
+                err = self.goto((start.x, start.y), theta, "back to start")
+                self.waypoints = None
+                print(f"back at the start position (error {err:.1f} mm)")
         else:
             print(
                 f"using heading offset {c.offset_deg} deg, turn sign {self.turn_sign:+d}")
@@ -529,11 +536,9 @@ class Servo:
                 for i, v in acc.items() if len(v) >= min_frac * n}
 
     # ---- mission
-    def run(self):
+    def square_path(self, p0):
+        """Headings of the four edges and the five waypoints (start ... start) of the square."""
         c = self.cfg
-        self.prepare()
-
-        p0 = self.avg_pose()
         step_ang = -math.pi / 2 if c.ccw else math.pi / 2
         psis = [p0.theta + i * step_ang for i in range(4)]
         W = [np.array([p0.x, p0.y])]
@@ -542,15 +547,39 @@ class Servo:
                      np.array([math.cos(psi), math.sin(psi)]))
         # close the square exactly
         W[-1] = W[0].copy()
-        self.waypoints = [tuple(w) for w in W]
+        return psis, W
 
+    def fits(self, W, margin=40):
         w_px, h_px = self.frame_size
-        m = 40
-        for w in W:
-            x, y = w / self.scale
-            if not (m <= x <= w_px - m and m <= y <= h_px - m):
-                raise RuntimeError(
-                    "the square does not fit in the camera image - move the robot or the camera")
+        return all(margin <= x <= w_px - margin and margin <= y <= h_px - margin
+                   for x, y in (w / self.scale for w in W))
+
+    def wait_until_square_fits(self):
+        """The square does not fit: the robot is moved by hand. Shows the square for the robot's
+        current pose live and returns when it fits and S is pressed."""
+        print("The square does not fit in the camera image. Move the robot by hand, then press S.")
+        info = "square does not fit - move the robot by hand"
+        while True:
+            pose = self.step(info)
+            if pose is None:
+                info = "marker not visible"
+                continue
+            _, W = self.square_path(pose)
+            ok = self.fits(W)
+            self.waypoints = [tuple(w) for w in W]
+            info = "square fits - press S to start" if ok else "square does not fit - move the robot by hand"
+            if ok and self.last_key == ord("s"):
+                return
+
+    def run(self):
+        self.prepare()
+        while True:
+            p0 = self.avg_pose()
+            psis, W = self.square_path(p0)
+            if self.fits(W):
+                break
+            self.wait_until_square_fits()
+        self.waypoints = [tuple(w) for w in W]
 
         for i, psi in enumerate(psis):
             self.turn_to(psi, f"edge {i + 1}/4")
