@@ -93,8 +93,8 @@ class Cfg:
     offset_deg: float = None
     turn_sign: int = 0
     # controller (wheel commands are Zumo units, -400..400)
-    vmax: float = 150.0         # cruising speed
-    vmin: float = 90.0          # speed when close to the corner
+    vmax: float = 100.0         # cruising speed
+    vmin: float = 80.0          # speed when close to the corner
     kv: float = 1.5             # speed per mm of remaining distance
     kw: float = 170.0           # steering command per rad of heading error
     kt: float = 200.0           # in-place turn command per rad of heading error
@@ -107,7 +107,7 @@ class Cfg:
     turn_tol_deg: float = 4.0
     spin_thresh_deg: float = 50.0
     settle_s: float = 0.35
-    lost_stop_s: float = 0.75
+    lost_stop_s: float = 0.5
     seg_timeout: float = 40.0
     turn_timeout: float = 20.0
     cal_speed: float = 120.0
