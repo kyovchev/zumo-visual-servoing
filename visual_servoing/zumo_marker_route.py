@@ -65,15 +65,17 @@ def main():
             "route:", " -> ".join(f"id {i} ({P[0]:.0f}, {P[1]:.0f}) mm" for i, P, _ in route))
 
         def overlay(frame):
+            ui = servo.ui
+            def t(n): return max(1, int(round(n * ui)))
             for n, (i, P, p_px) in enumerate(route, 1):
                 q = tuple(int(v) for v in p_px)
-                cv2.circle(frame, q, 14, (255, 255, 255), 2)
-                cv2.putText(frame, f"{n}: id {i}", (q[0] + 16, q[1] - 12),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+                cv2.circle(frame, q, t(14), (255, 255, 255), t(2))
+                cv2.putText(frame, f"{n}: id {i}", (q[0] + t(16), q[1] - t(12)),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.6 * ui, (255, 255, 255), t(2))
                 # where the robot's marker must be
-                t = (P / s_r).astype(int)
-                cv2.drawMarker(frame, (int(t[0]), int(
-                    t[1])), (0, 0, 255), cv2.MARKER_CROSS, 18, 2)
+                tp = (P / s_r).astype(int)
+                cv2.drawMarker(frame, (int(tp[0]), int(
+                    tp[1])), (0, 0, 255), cv2.MARKER_CROSS, t(18), t(2))
 
         servo.overlay = overlay
         while True:
