@@ -12,6 +12,14 @@ The 3D printed parts are shown in the following figure.
 
 Three different scenarios are executed: movement on a square trajectory with side length of 300 mm, movement to a position selected with the cursor and movement over a trajectory denoted with an AruCo markers placed in the workspace of the robot. Videos from the experiments are shown below.
 
+Execution of square trajectory without any camera calibration:
+
+Execution of square trajectory after camera and plane calibration:
+
+Exectuion of click go to commands:
+
+Execution of trajectory denoted with AruCo markers:
+
 ## Control Hardware
 
 The robot is controlled by Arduino board with an additional ESP32 board for wireless remote control via HTTP REST or WebSocket APIs. The API references are given below. The used ESP32 is shown in the following figure.
