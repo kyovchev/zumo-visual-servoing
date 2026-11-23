@@ -6,7 +6,7 @@ The goal is to develop a simple visual servo control for a differential drive ro
 
 ## Robot Body
 
-For this experiment a specific 3D printed robot body is designed. It allows an AruCo marker to be placed on top of the robot.
+For this experiment a specific 3D printed robot body is designed. It allows an ArUco marker to be placed on top of the robot.
 
 The 3D printed parts are shown in the following image.
 
@@ -14,15 +14,15 @@ The 3D printed parts are shown in the following image.
 
 ## Experiments
 
-Three different scenarios are executed: movement on a square trajectory with side length of 300 mm, movement to a position selected with the cursor and movement over a trajectory denoted with an AruCo markers placed in the workspace of the robot. Videos from the experiments are shown below.
+Three different scenarios are executed: movement on a square trajectory with side length of 300 mm, movement to a position selected with the cursor and movement over a trajectory denoted with an ArUco markers placed in the workspace of the robot. Video from the experiments is shown below.
 
-Execution of a square trajectory without any camera calibration:
+https://youtu.be/YRNVU_YvoyM
 
-Execution of a square trajectory after camera and plane calibration:
+[![Video from Experiments](https://img.youtube.com/vi/YRNVU_YvoyM/0.jpg)](https://youtu.be/YRNVU_YvoyM)
 
-Exectuion of click go to commands:
+The trajectory execution was improved by adding camera and plane calibrations. Video from experiments after the calibration is shown below.
 
-Execution of a trajectory denoted with AruCo markers:
+[![Visual Servoing after Camera and Plane Calibrations](https://img.youtube.com/vi/JFT7G15iGwE/0.jpg)](https://youtu.be/JFT7G15iGwE)
 
 ## Control Hardware
 
