@@ -1,28 +1,34 @@
 # Zumo Robot Visual Servoing Control
 
-The goal is to develop a simple visual servo control for a differential drive robot. The used robot is the well known Zumo robot. The assembled robot is shown in the following figure.
+The goal is to develop a simple visual servo control for a differential drive robot. The used robot is the well known Zumo robot. The assembled robot is shown in the following image.
+
+[![Robot](./images/robot_320.jpg)](./images/robot.jpg)
 
 ## Robot Body
 
 For this experiment a specific 3D printed robot body is designed. It allows an AruCo marker to be placed on top of the robot.
 
-The 3D printed parts are shown in the following figure.
+The 3D printed parts are shown in the following image.
+
+[![Parts](./images/parts_320.jpg)](./images/parts.jpg)
 
 ## Experiments
 
 Three different scenarios are executed: movement on a square trajectory with side length of 300 mm, movement to a position selected with the cursor and movement over a trajectory denoted with an AruCo markers placed in the workspace of the robot. Videos from the experiments are shown below.
 
-Execution of square trajectory without any camera calibration:
+Execution of a square trajectory without any camera calibration:
 
-Execution of square trajectory after camera and plane calibration:
+Execution of a square trajectory after camera and plane calibration:
 
 Exectuion of click go to commands:
 
-Execution of trajectory denoted with AruCo markers:
+Execution of a trajectory denoted with AruCo markers:
 
 ## Control Hardware
 
-The robot is controlled by Arduino board with an additional ESP32 board for wireless remote control via HTTP REST or WebSocket APIs. The API references are given below. The used ESP32 is shown in the following figure.
+The robot is controlled by Arduino board with an additional ESP32 board for wireless remote control via HTTP REST or WebSocket APIs. The API references are given below. The used ESP32 is shown in the following image.
+
+[![ESP32](./images/ESP32_320.jpg)](./images/ESP32.jpg)
 
 ## REST API (Port 80)
 
