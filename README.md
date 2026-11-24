@@ -12,6 +12,8 @@ The 3D printed parts are shown in the following image.
 
 [![Parts](./images/parts_320.jpg)](./images/parts.jpg)
 
+The body is assembled with 6 M3x10mm bolts and M3 hex nuts while it is attached to the Zumo robot with double sided tape.
+
 ## Experiments
 
 Three different scenarios are executed: movement on a square trajectory with side length of 300 mm, movement to a position selected with the cursor and movement over a trajectory denoted with an ArUco markers placed in the workspace of the robot. Video from the experiments is shown below.
